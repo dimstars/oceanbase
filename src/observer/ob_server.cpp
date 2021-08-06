@@ -944,10 +944,14 @@ int ObServer::init_pre_setting()
   // oblog configuration
   if (OB_SUCC(ret)) {
     const int max_log_cnt = static_cast<int32_t>(config_.max_syslog_file_count);
+    const int log_retention_time = static_cast<int32_t>(config_.syslog_file_retention_time);
+    const int log_compression_ratio = static_cast<int32_t>(config_.syslog_file_compression_ratio);
     const bool record_old_log_file = config_.enable_syslog_recycle;
     const bool log_warn = config_.enable_syslog_wf;
     const bool enable_async_syslog = config_.enable_async_syslog;
     OB_LOGGER.set_max_file_index(max_log_cnt);
+    OB_LOGGER.set_file_retention_time(log_retention_time);
+    OB_LOGGER.set_file_compression_ratio(log_compression_ratio);
     OB_LOGGER.set_record_old_log_file(record_old_log_file);
     LOG_INFO("Whether record old log file", K(record_old_log_file));
     OB_LOGGER.set_log_warn(log_warn);
