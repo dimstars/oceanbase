@@ -396,6 +396,7 @@ ob_lib_add_pchs(lib
   compress/zstd/ob_zstd_compressor.h
   compress/zstd_1_3_8/ob_zstd_stream_compressor_1_3_8.h
   compress/zstd_1_3_8/ob_zstd_compressor_1_3_8.h
+  compress/zip/ob_zip_compressor.h
   compress/snappy/ob_snappy_compressor.h
   compress/none/ob_none_compressor.h
   compress/ob_compress_util.h

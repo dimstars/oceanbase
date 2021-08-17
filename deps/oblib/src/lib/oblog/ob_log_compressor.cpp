@@ -27,6 +27,7 @@
 #include "lib/utility/ob_macro_utils.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/compress/ob_compressor_pool.h"
+#include "lib/compress/zip/ob_zip_compressor.h"
 
 using namespace oceanbase::lib;
 
@@ -156,6 +157,7 @@ void * ObLogCompressor::log_compress_thread(void *arg)
 
 void ObLogCompressor::log_compress()
 {
+  ObZipCompressor &compressor = ObZipCompressor::get_instance();
   static int sleep_us = 100 * 1000; // 100ms
   int src_size   = DEFAULT_COMPRESSION_BLOCK_SIZE;
   int dest_size  = DEFAULT_COMPRESSION_BUFFER_SIZE;
@@ -177,7 +179,7 @@ void ObLogCompressor::log_compress()
 
     if (has_stoped_ || file_name.empty() || 0 != access(file_name.c_str(), F_OK)) {
     } else {
-      std::string compression_file_name = get_compression_file_name(file_name);
+      std::string compression_file_name = file_name + ".zip";
       FILE *input_file = NULL;
       FILE *output_file = NULL;
       if (NULL == (input_file = fopen(file_name.c_str(), "r"))) {
@@ -186,21 +188,46 @@ void ObLogCompressor::log_compress()
         fclose(input_file);
         LOG_STDERR("Fialed to fopen, err_code=%d.\n", errno);
       } else {
+        int ret = OB_SUCCESS;
         size_t read_size = 0;
         size_t write_size = 0;
-        int ret = OB_SUCCESS;
-        if (src_buf && dest_buf) {
-          while(OB_SUCC(ret) && !feof(input_file)) {
-            if ((read_size = fread(src_buf, 1, src_size, input_file)) > 0) {
-              if (OB_FAIL(log_compress_block(dest_buf, dest_size, src_buf, read_size, write_size))) {
-                LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
-              } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
-                ret = OB_ERR_SYS;
-                LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
-              }
+        compressor.set_file_name(file_name);
+        if (OB_FAIL(compressor.compress(src_buf, read_size, dest_buf, write_size, FAKE_FILE_HEADER))) {
+          LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
+        } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
+          ret = OB_ERR_SYS;
+          LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
+        }
+        while(OB_SUCC(ret) && !feof(input_file)) {
+          if ((read_size = fread(src_buf, 1, src_size, input_file)) > 0) {
+            if (OB_FAIL(compressor.compress(src_buf, read_size, dest_buf, write_size, DATA))) {
+              LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
+            } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
+              ret = OB_ERR_SYS;
+              LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
             }
-            usleep(sleep_us);
           }
+          usleep(sleep_us);
+        }
+        if (OB_FAIL(compressor.compress(src_buf, read_size, dest_buf, write_size, LAST_DATA))) {
+          LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
+        } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
+          ret = OB_ERR_SYS;
+          LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
+        }
+        fseek(output_file, 0, SEEK_SET);
+        if (OB_FAIL(compressor.compress(src_buf, read_size, dest_buf, write_size, FILE_HEADER))) {
+          LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
+        } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
+          ret = OB_ERR_SYS;
+          LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
+        }
+        fseek(output_file, 0, SEEK_END);
+        if (OB_FAIL(compressor.compress(src_buf, read_size, dest_buf, write_size, TAIL))) {
+          LOG_STDERR("Failed to log_compress_block, err_code=%d.\n", ret);
+        } else if (write_size != fwrite(dest_buf, 1, write_size, output_file)) {
+          ret = OB_ERR_SYS;
+          LOG_STDERR("Failed to fwrite, err_code=%d.\n", errno);
         }
         fclose(input_file);
         fclose(output_file);

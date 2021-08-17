@@ -25,6 +25,7 @@
 #include "zstd/ob_zstd_stream_compressor.h"
 #include "zstd_1_3_8/ob_zstd_compressor_1_3_8.h"
 #include "zstd_1_3_8/ob_zstd_stream_compressor_1_3_8.h"
+#include "zip/ob_zip_compressor.h"
 
 namespace oceanbase {
 namespace common {

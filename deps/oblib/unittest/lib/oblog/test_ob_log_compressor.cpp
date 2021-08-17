@@ -53,7 +53,7 @@ TEST(ObLogCompressor, normal)
   ASSERT_EQ(OB_SUCCESS, ret);
 
   // get compression result
-  sleep(2);
+  /*sleep(2);
   std::string compression_file_name = log_compressor.get_compression_file_name(file_name);
   ASSERT_EQ(0, access(compression_file_name.c_str(), F_OK));
   FILE * output_file = fopen(compression_file_name.c_str(), "r");
@@ -85,7 +85,7 @@ TEST(ObLogCompressor, normal)
   free(decomp_buf);
   ASSERT_NE(0, access(file_name.c_str(), F_OK));
   ASSERT_EQ(0, access(compression_file_name.c_str(), F_OK));
-  unlink(compression_file_name.c_str());
+  unlink(compression_file_name.c_str());*/
 
   // destroy and init
   log_compressor.destroy();
