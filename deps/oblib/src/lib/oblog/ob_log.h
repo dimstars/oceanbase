@@ -35,7 +35,6 @@
 #include "ob_log_print_kv.h"
 #include "lib/coro/co_var.h"
 
-#include "lib/oblog/ob_log_compressor.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/oblog/ob_log_level.h"
 #include "lib/oblog/ob_async_log_struct.h"
@@ -55,6 +54,7 @@ namespace oceanbase {
 namespace common {
 class ObFIFOAllocator;
 class ObPLogItem;
+class ObString;
 
 #define OB_LOGGER ::oceanbase::common::ObLogger::get_logger()
 #define OB_LOG_NEED_TO_PRINT(level) (OB_UNLIKELY(OB_LOGGER.need_to_print(OB_LOG_LEVEL_##level)))
@@ -867,13 +867,15 @@ public:
   void set_max_file_size(int64_t max_file_size);
   //@brief Set the max number of log-files. If max_file_index = 0, no limit.
   int set_max_file_index(int64_t max_file_index = 0x0F);
-  //@brief Set the max retention time of log-files. If file_retention_time = 0, no limit.
-  int set_file_retention_time(int64_t file_retention_time);
-  //@brief Set the percentage of log-files to compress. If file_compression_ratio = 0, no compression.
-  int set_file_compression_ratio(int32_t file_compression_ratio);
+  //@brief Set the max retention time of log-files. If max_file_time = 0, no limit.
+  int set_max_file_time(int64_t max_file_time);
+  //@brief Set the percentage of log-files to compress. If enable_file_compress = 0, no compression.
+  int set_enable_file_compress(bool enable_file_compress);
   //@brief Set whether record old log file. If this flag and max_file_index set,
   // will record log files in the directory for log file
   int set_record_old_log_file(bool rec_old_file_flag = false);
+
+  int set_append_file_func(int (*func)(const ObString &));
 
   //@brief Get current time.
   static struct timeval get_cur_tv();
@@ -1069,12 +1071,12 @@ private:
   static RLOCAL(bool, disable_logging_);
 
   ObPLogFileStruct log_file_[MAX_FD_FILE];
-  ObLogCompressor log_compressor_;
+  int (*append_compression_file_)(const ObString &);
 
   int64_t max_file_size_;
   int64_t max_file_index_;
-  int64_t file_retention_time_;         // max retention time(second) of log-file
-  int32_t file_compression_ratio_;    // percentage of log-file to compress
+  int64_t max_file_time_;         // max retention time(second) of log-file
+  int32_t enable_file_compress_;    // percentage of log-file to compress
 
   pthread_mutex_t file_size_mutex_;
   pthread_mutex_t file_index_mutex_;

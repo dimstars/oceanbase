@@ -73,6 +73,7 @@
 #include "observer/ob_server_memory_cutter.h"
 #include "share/ob_bg_thread_monitor.h"
 #include "observer/omt/ob_tenant_timezone_mgr.h"
+#include "lib/oblog/ob_log_compressor.h"
 //#include "share/ob_ofs.h"
 
 using namespace oceanbase::lib;
@@ -170,8 +171,17 @@ int ObServer::init(const ObServerOptions& opts, const ObPLogWriterCfg& log_cfg)
   ObLargePageHelper::set_param(config_.use_large_pages);
 
   if (OB_SUCC(ret)) {
+    if (OB_FAIL(log_compressor_.init())) {
+      LOG_ERROR("log compressor init error.", K(ret));
+    }
+  }
+
+  if (OB_SUCC(ret)) {
     if (OB_FAIL(OB_LOGGER.init(log_cfg))) {
       LOG_ERROR("async log init error.", K(ret));
+      ret = OB_ELECTION_ASYNC_LOG_WARN_INIT;
+    } else if (OB_FAIL(OB_LOGGER.set_append_file_func(&ObLogCompressor::append_log))) {
+      LOG_ERROR("set log compress func error.", K(ret));
       ret = OB_ELECTION_ASYNC_LOG_WARN_INIT;
     }
   }
@@ -944,14 +954,14 @@ int ObServer::init_pre_setting()
   // oblog configuration
   if (OB_SUCC(ret)) {
     const int max_log_cnt = static_cast<int32_t>(config_.max_syslog_file_count);
-    const int log_retention_time = static_cast<int32_t>(config_.syslog_file_retention_time);
-    const int log_compression_ratio = static_cast<int32_t>(config_.syslog_file_compression_ratio);
+    const int64_t max_log_time = config_.max_syslog_file_time;
+    const bool enable_log_compress = config_.enable_syslog_file_compress;
     const bool record_old_log_file = config_.enable_syslog_recycle;
     const bool log_warn = config_.enable_syslog_wf;
     const bool enable_async_syslog = config_.enable_async_syslog;
     OB_LOGGER.set_max_file_index(max_log_cnt);
-    OB_LOGGER.set_file_retention_time(log_retention_time);
-    OB_LOGGER.set_file_compression_ratio(log_compression_ratio);
+    OB_LOGGER.set_max_file_time(max_log_time);
+    OB_LOGGER.set_enable_file_compress(enable_log_compress);
     OB_LOGGER.set_record_old_log_file(record_old_log_file);
     LOG_INFO("Whether record old log file", K(record_old_log_file));
     OB_LOGGER.set_log_warn(log_warn);

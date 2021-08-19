@@ -10,34 +10,46 @@
  * See the Mulan PubL v2 for more details.
  */
 
-#include <string>
-#include <deque>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <pthread.h>
-#include <sys/prctl.h>
 
-#include "malloc.h"
 #include "lib/oblog/ob_log_compressor.h"
 #include "lib/ob_errno.h"
 #include "lib/utility/ob_macro_utils.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/compress/ob_compressor_pool.h"
+#include "lib/string/ob_string.h"
+#include "lib/ob_define.h"
+#include "lib/thread/thread_pool.h"
+#include "lib/lock/ob_thread_cond.h"
+#include "lib/list/ob_list.h"
+#include "lib/lock/ob_mutex.h"
+#include "lib/allocator/ob_malloc.h"
+#include "lib/oblog/ob_async_log_struct.h"
 
 using namespace oceanbase::lib;
 
 namespace oceanbase {
 namespace common {
+/* Log files are divided into blocks and then compressed. The default block size is (2M - 1K).*/
+static const int32_t DEFAULT_COMPRESSION_BLOCK_SIZE = OB_MALLOC_BIG_BLOCK_SIZE;
+/* To prevent extreme cases where the files become larger after compression,
+ * the size of the decompression buffer needs to be larger than the original data.
+ * Specific size can refer to the ZSTD code implementation. */
+static const int32_t DEFAULT_COMPRESSION_BUFFER_SIZE = DEFAULT_COMPRESSION_BLOCK_SIZE + DEFAULT_COMPRESSION_BLOCK_SIZE/128 + 512 + 19;
+static const int32_t DEFAULT_FILE_NAME_SIZE = ObPLogFileStruct::MAX_LOG_FILE_NAME_SIZE;
+static const int32_t DEFAULT_LOG_QUEUE_DEPTH = 100000;
+
 ObLogCompressor::ObLogCompressor()
-  : is_inited_(false),
-    has_stoped_(true),
-    compressor_(NULL),
-    compress_tid_(0)
-{}
+  : compressor_(NULL)
+{
+  is_inited_ = false;
+  has_stoped_ = true;
+}
 
 ObLogCompressor::~ObLogCompressor()
 {}
@@ -48,13 +60,12 @@ int ObLogCompressor::init()
   if (OB_UNLIKELY(is_inited_)) {
     ret = OB_INIT_TWICE;
     LOG_STDERR("The ObLogCompressor has been inited.\n");
-  } else if (0 != pthread_mutex_init(&log_compress_mutex_, NULL)) {
+  } else if (OB_FAIL(file_list_.init(DEFAULT_LOG_QUEUE_DEPTH))) {
     ret = OB_ERR_SYS;
-    LOG_STDERR("Failed to pthread_mutex_init.\n");
-  } else if (0 != pthread_cond_init(&log_compress_cond_, NULL)) {
+    LOG_STDERR("Failed to init file_list_.\n");
+  } else if (OB_FAIL(log_compress_cond_.init(ObWaitEventIds::DEFAULT_COND_WAIT))) {
     ret = OB_ERR_SYS;
-    pthread_mutex_destroy(&log_compress_mutex_);
-    LOG_STDERR("Failed to pthread_cond_init.\n");
+    LOG_STDERR("Failed to init ObThreadCond.\n");
   } else {
     ObCompressor *ptr = NULL;
     if (OB_FAIL(ObCompressorPool::get_instance().get_compressor(ZSTD_1_3_8_COMPRESSOR, ptr))) {
@@ -62,17 +73,16 @@ int ObLogCompressor::init()
     } else {
       compressor_ = ptr;
       has_stoped_ = false;
-      if (OB_UNLIKELY(0 != pthread_create(&compress_tid_, NULL, ObLogCompressor::log_compress_thread, this))) {
+      if (OB_FAIL(start())) {
         ret = OB_ERR_SYS;
         LOG_STDERR("Fail to create log compression thread.\n");
       } else {
         is_inited_ = true;
-        LOG_STDOUT("Success to create thread %ld.\n", compress_tid_);
+        LOG_STDOUT("Success to create thread.\n");
       }
     }
     if (ret) {
-      pthread_mutex_destroy(&log_compress_mutex_);
-      pthread_cond_destroy(&log_compress_cond_);
+      log_compress_cond_.destroy();
     }
   }
   if (!is_inited_) {
@@ -84,28 +94,30 @@ int ObLogCompressor::init()
 
 void ObLogCompressor::destroy()
 {
-  is_inited_ = false;
-  if (0 != compress_tid_) {
-    pthread_mutex_lock(&log_compress_mutex_);
-    file_list_.clear();
-    pthread_cond_signal(&log_compress_cond_);
-    pthread_mutex_unlock(&log_compress_mutex_);
+  if (is_inited_) {
+    is_inited_ = false;
+    log_compress_cond_.lock();
+    file_list_.destroy();
     has_stoped_ = true;
-    pthread_join(compress_tid_, NULL);
-    compress_tid_ = 0;
-    pthread_mutex_destroy(&log_compress_mutex_);
-    pthread_cond_destroy(&log_compress_cond_);
+    log_compress_cond_.signal();
+    log_compress_cond_.unlock();
+    wait();
+    log_compress_cond_.destroy();
   }
 }
 
-std::string ObLogCompressor::get_compression_file_name(const std::string &file_name)
+ObString ObLogCompressor::get_compression_file_name(const ObString &file_name)
 {
-  std::string compression_file_name;
-  int size = file_name.size();
-  if (size > 4 && file_name.substr(size - 4) == ".zst") {
-    compression_file_name = file_name;
-  } else if (size > 0) {
-    compression_file_name = file_name + ".zst";
+  ObString compression_file_name;
+  ObString suffix_str = ".zst";
+  int size = file_name.length();
+  char *buf = (char *)ob_malloc(DEFAULT_FILE_NAME_SIZE);
+  if (buf) {
+    compression_file_name.assign_buffer(buf, DEFAULT_FILE_NAME_SIZE);
+    compression_file_name.write(file_name.ptr(), size);
+  }
+  if (size > 0 && !file_name.contains(suffix_str.ptr())) {
+    compression_file_name.write(suffix_str.ptr(), suffix_str.length());
   }
   return compression_file_name;
 }
@@ -115,17 +127,18 @@ ObCompressor * ObLogCompressor::get_compressor()
   return compressor_;
 }
 
-int ObLogCompressor::append_log(const std::string &file_name)
+int ObLogCompressor::append_log(const ObString &file_name)
 {
   int ret = OB_SUCCESS;
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_STDERR("The ObLogCompressor has not been inited.\n");
   } else {
-    pthread_mutex_lock(&log_compress_mutex_);
-    file_list_.push_back(file_name);
-    pthread_cond_signal(&log_compress_cond_);
-    pthread_mutex_unlock(&log_compress_mutex_);
+    ObString *file_name_ptr = new ObString(file_name);
+    log_compress_cond_.lock();
+    file_list_.push(file_name_ptr);
+    log_compress_cond_.signal();
+    log_compress_cond_.unlock();
   }
   return ret;
 }
@@ -142,54 +155,41 @@ int ObLogCompressor::log_compress_block(char* dest, size_t dest_size, const char
   return ret;
 }
 
-void * ObLogCompressor::log_compress_thread(void *arg)
-{
-  if (NULL == arg) {
-    LOG_STDERR("log_compress_thread init failed due to invalid arguments.\n");
-  } else {
-    ObLogCompressor * compressor = reinterpret_cast<ObLogCompressor *>(arg);
-    prctl(PR_SET_NAME, "syslog_compress");
-    compressor->log_compress();
-  }
-  return NULL;
-}
-
 void ObLogCompressor::log_compress()
 {
+  int ret = OB_SUCCESS;
   static int sleep_us = 100 * 1000; // 100ms
   int src_size   = DEFAULT_COMPRESSION_BLOCK_SIZE;
   int dest_size  = DEFAULT_COMPRESSION_BUFFER_SIZE;
-  char *src_buf  = (char *)malloc(src_size);
-  char *dest_buf = (char *)malloc(dest_size);
+  char *src_buf  = (char *)ob_malloc(src_size);
+  char *dest_buf = (char *)ob_malloc(dest_size);
   if (!src_buf || !dest_buf) {
-    LOG_STDERR("Failed to malloc.\n");
-  } else while (!has_stoped_) {
-    std::string file_name;
-    pthread_mutex_lock(&log_compress_mutex_);
-    if (file_list_.empty()) {
-      pthread_cond_wait(&log_compress_cond_, &log_compress_mutex_);
-    }
-    if (!has_stoped_ && !file_list_.empty()) {
-      file_name = file_list_.front();
-      file_list_.pop_front();
-    }
-    pthread_mutex_unlock(&log_compress_mutex_);
+    LOG_STDERR("Failed to ob_malloc.\n");
+  } else {
+    while (!has_stoped_) {
+      ObString *file_name = NULL;
+      log_compress_cond_.lock();
+      while (0 >= file_list_.get_total() && !has_stoped_) {
+        log_compress_cond_.wait(0);
+      }
+      if (!has_stoped_) {
+        ret = file_list_.pop(file_name);
+      }
+      log_compress_cond_.unlock();
 
-    if (has_stoped_ || file_name.empty() || 0 != access(file_name.c_str(), F_OK)) {
-    } else {
-      std::string compression_file_name = get_compression_file_name(file_name);
-      FILE *input_file = NULL;
-      FILE *output_file = NULL;
-      if (NULL == (input_file = fopen(file_name.c_str(), "r"))) {
-        LOG_STDERR("Fialed to fopen, err_code=%d.\n", errno);
-      } else if (NULL == (output_file = fopen(compression_file_name.c_str(), "w"))) {
-        fclose(input_file);
-        LOG_STDERR("Fialed to fopen, err_code=%d.\n", errno);
+      if (has_stoped_ || NULL == file_name || file_name->empty() || 0 != access(file_name->ptr(), F_OK)) {
       } else {
-        size_t read_size = 0;
-        size_t write_size = 0;
-        int ret = OB_SUCCESS;
-        if (src_buf && dest_buf) {
+        ObString compression_file_name = get_compression_file_name(*file_name);
+        FILE *input_file = NULL;
+        FILE *output_file = NULL;
+        if (NULL == (input_file = fopen(file_name->ptr(), "r"))) {
+          LOG_STDERR("Fialed to fopen, err_code=%d.\n", errno);
+        } else if (NULL == (output_file = fopen(compression_file_name.ptr(), "w"))) {
+          fclose(input_file);
+          LOG_STDERR("Fialed to fopen, err_code=%d.\n", errno);
+        } else {
+          size_t read_size = 0;
+          size_t write_size = 0;
           while(OB_SUCC(ret) && !feof(input_file)) {
             if ((read_size = fread(src_buf, 1, src_size, input_file)) > 0) {
               if (OB_FAIL(log_compress_block(dest_buf, dest_size, src_buf, read_size, write_size))) {
@@ -201,23 +201,45 @@ void ObLogCompressor::log_compress()
             }
             usleep(sleep_us);
           }
-        }
-        fclose(input_file);
-        fclose(output_file);
-        if (0 != access(file_name.c_str(), F_OK) || OB_SUCCESS != ret) {
-          unlink(compression_file_name.c_str());
-        } else {
-          unlink(file_name.c_str());
+          fclose(input_file);
+          fclose(output_file);
+          if (0 != access(file_name->ptr(), F_OK) || OB_SUCCESS != ret) {
+            unlink(compression_file_name.ptr());
+          } else {
+            unlink(file_name->ptr());
+          }
         }
       }
     }
   }
   if (src_buf) {
-    free(src_buf);
+    ob_free(src_buf);
   }
   if (dest_buf) {
-    free(dest_buf);
+    ob_free(dest_buf);
   }
+}
+
+void ObLogCompressor::run1()
+{
+  lib::set_thread_name("syslog_compress");
+  log_compress();
+}
+
+int ObLogCompressor::start()
+{
+  ThreadPool::start();
+  return OB_SUCCESS;
+}
+
+void ObLogCompressor::stop()
+{
+  ThreadPool::stop();
+}
+
+void ObLogCompressor::wait()
+{
+  ThreadPool::wait();
 }
 
 }

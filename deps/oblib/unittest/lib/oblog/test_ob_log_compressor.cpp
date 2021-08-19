@@ -14,6 +14,7 @@
 #include "lib/oblog/ob_log_compressor.h"
 #include "lib/compress/ob_compressor_pool.h"
 #include "lib/ob_errno.h"
+#include "lib/string/ob_string.h"
 
 using namespace oceanbase::lib;
 
@@ -37,8 +38,8 @@ TEST(ObLogCompressor, normal)
   ASSERT_EQ(OB_INIT_TWICE, ret);
 
   // prepare data
-  std::string file_name = "test_ob_log_compressor_file";
-  FILE * input_file = fopen(file_name.c_str(), "w");
+  ObString file_name = "test_ob_log_compressor_file";
+  FILE * input_file = fopen(file_name.ptr(), "w");
   ASSERT_EQ(true, NULL != input_file);
   int data[test_count];
   for (int i = 0; i < test_count; i++) {
@@ -54,9 +55,9 @@ TEST(ObLogCompressor, normal)
 
   // get compression result
   sleep(2);
-  std::string compression_file_name = log_compressor.get_compression_file_name(file_name);
-  ASSERT_EQ(0, access(compression_file_name.c_str(), F_OK));
-  FILE * output_file = fopen(compression_file_name.c_str(), "r");
+  ObString compression_file_name = log_compressor.get_compression_file_name(file_name);
+  ASSERT_EQ(0, access(compression_file_name.ptr(), F_OK));
+  FILE * output_file = fopen(compression_file_name.ptr(), "r");
   ASSERT_EQ(true, NULL != output_file);
   int buf_size = test_size + 512;
   int read_size = 0;
@@ -83,14 +84,17 @@ TEST(ObLogCompressor, normal)
   // clear environment
   free(buf);
   free(decomp_buf);
-  ASSERT_NE(0, access(file_name.c_str(), F_OK));
-  ASSERT_EQ(0, access(compression_file_name.c_str(), F_OK));
-  unlink(compression_file_name.c_str());
+  ASSERT_NE(0, access(file_name.ptr(), F_OK));
+  ASSERT_EQ(0, access(compression_file_name.ptr(), F_OK));
+  unlink(compression_file_name.ptr());
 
   // destroy and init
   log_compressor.destroy();
   ret = log_compressor.init();
   ASSERT_EQ(OB_SUCCESS, ret);
+  ret = log_compressor.append_log(file_name);
+  ASSERT_EQ(OB_SUCCESS, ret);
+  sleep(2);
 
   // repeat destroy
   log_compressor.destroy();

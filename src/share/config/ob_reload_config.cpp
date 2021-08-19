@@ -32,10 +32,10 @@ int ObReloadConfig::reload_ob_logger_set()
           K(ret));
     } else if (OB_FAIL(OB_LOGGER.set_max_file_index(static_cast<int32_t>(conf_->max_syslog_file_count)))) {
       OB_LOG(ERROR, "fail to set_max_file_index", K(conf_->max_syslog_file_count.get()), K(ret));
-    } else if (OB_FAIL(OB_LOGGER.set_file_retention_time(static_cast<int32_t>(conf_->syslog_file_retention_time)))) {
-      OB_LOG(ERROR, "fail to set_file_retention_time", K(conf_->syslog_file_retention_time.get()), K(ret));
-    } else if (OB_FAIL(OB_LOGGER.set_file_compression_ratio(static_cast<int32_t>(conf_->syslog_file_compression_ratio)))) {
-      OB_LOG(ERROR, "fail to set_file_compression_ratio", K(conf_->syslog_file_compression_ratio.get()), K(ret));
+    } else if (OB_FAIL(OB_LOGGER.set_max_file_time(static_cast<int32_t>(conf_->max_syslog_file_time)))) {
+      OB_LOG(ERROR, "fail to set_max_file_time", K(conf_->max_syslog_file_time.get()), K(ret));
+    } else if (OB_FAIL(OB_LOGGER.set_enable_file_compress(static_cast<int32_t>(conf_->enable_syslog_file_compress)))) {
+      OB_LOG(ERROR, "fail to set_enable_file_compress", K(conf_->enable_syslog_file_compress.str()), K(ret));
     } else if (OB_FAIL(OB_LOGGER.set_record_old_log_file(conf_->enable_syslog_recycle))) {
       OB_LOG(ERROR, "fail to set_record_old_log_file", K(conf_->enable_syslog_recycle.str()), K(ret));
     } else {

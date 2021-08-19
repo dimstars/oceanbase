@@ -203,13 +203,14 @@ DEF_INT(cluster_id, OB_CLUSTER_PARAMETER, "0", "[1,4294901759]", "ID of the clus
     ObParameterAttr(Section::OBSERVER, Source::DEFAULT, EditLevel::DYNAMIC_EFFECTIVE));
 DEF_STR(obconfig_url, OB_CLUSTER_PARAMETER, "", "URL for OBConfig service",
     ObParameterAttr(Section::OBSERVER, Source::DEFAULT, EditLevel::DYNAMIC_EFFECTIVE));
-DEF_INT(syslog_file_compression_ratio, OB_CLUSTER_PARAMETER, "0", "[0,100]",
-    "specifies the percentage of log files to compress. "
-    "When this value is set to 0, no log file will be compressed. Range: [0, 100] in integer",
+DEF_BOOL(enable_syslog_file_compress, OB_CLUSTER_PARAMETER, "False",
+    "specifies whether to compress archive log files"
+    "Value: True:turned on; False: turned off",
     ObParameterAttr(Section::OBSERVER, Source::DEFAULT, EditLevel::DYNAMIC_EFFECTIVE));
-DEF_INT(syslog_file_retention_time, OB_CLUSTER_PARAMETER, "0", "[0,]",
-    "specifies the maximum retention time(unit:day) of the log files. "
-    "When this value is set to 0, no log file will be removed due to time. Range: [0, +∞) in integer",
+DEF_TIME(max_syslog_file_time, OB_CLUSTER_PARAMETER, "0", "[0, 3650d]",
+    "specifies the maximum retention time of the log files. "
+    "When this value is set to 0, no log file will be removed due to time."
+    "with default 0. Range: [0s, 3650d]",
     ObParameterAttr(Section::OBSERVER, Source::DEFAULT, EditLevel::DYNAMIC_EFFECTIVE));
 DEF_LOG_LEVEL(syslog_level, OB_CLUSTER_PARAMETER, "INFO",
     "specifies the current level of logging. There are DEBUG, TRACE, INFO, WARN, USER_ERR, ERROR, six different log "

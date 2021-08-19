@@ -13,45 +13,44 @@
 #ifndef OB_LOG_COMPRESSOR_H_
 #define OB_LOG_COMPRESSOR_H_
 
-#include <string>
-#include <deque>
-#include <pthread.h>
+#include "lib/thread/thread_pool.h"
+#include "lib/lock/ob_thread_cond.h"
+#include "lib/list/ob_list.h"
+#include "lib/queue/ob_fixed_queue.h"
 
 namespace oceanbase {
 namespace common {
-/* Log files are divided into blocks and then compressed. The default block size is 2M.*/
-static const int32_t DEFAULT_COMPRESSION_BLOCK_SIZE = 2 * 1024 * 1024;
-/* To prevent extreme cases where the files become larger after compression,
- * the size of the decompression buffer needs to be larger than the original data.
- * Specific size can refer to the ZSTD code implementation. */
-static const int32_t DEFAULT_COMPRESSION_BUFFER_SIZE =  DEFAULT_COMPRESSION_BLOCK_SIZE + DEFAULT_COMPRESSION_BLOCK_SIZE/128 + 512 + 19;
 
 class ObCompressor;
+class ObString;
+class ObMalloc;
 
-class ObLogCompressor final
+class ObLogCompressor final : public lib::ThreadPool
 {
 public:
   ObLogCompressor();
   virtual ~ObLogCompressor();
   static void * log_compress_thread(void *args);
-  static std::string get_compression_file_name(const std::string &file_name);
+  static ObString get_compression_file_name(const ObString &file_name);
+  static int append_log(const ObString &file_name);
   int init();
   void destroy();
-  int append_log(const std::string &file_name);
   void log_compress();
   ObCompressor * get_compressor();
 
 private:
   int log_compress_block(char* dest, size_t dest_size, const char* src, size_t src_size, size_t &return_size);
+  void run1() override;
+  int start() override;
+  void stop() override;
+  void wait() override;
 
 private:
-  bool is_inited_;
-  bool has_stoped_;
+  static ObFixedQueue<ObString> file_list_;
+  static bool is_inited_;
+  static bool has_stoped_;
+  static ObThreadCond log_compress_cond_;
   ObCompressor * compressor_;
-  std::deque<std::string> file_list_;
-  pthread_mutex_t log_compress_mutex_;
-  pthread_cond_t log_compress_cond_;
-  pthread_t compress_tid_;
 };
 
 }
